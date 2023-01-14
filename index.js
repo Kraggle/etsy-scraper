@@ -1,4 +1,4 @@
-// @ts-nocheck
+
 // Install the Node ScrapingBee library
 // npm install scrapingbee
 const scrapingbee = require('scrapingbee'),
@@ -31,13 +31,14 @@ const extract_rules = {
 	}
 };
 
-const extract = [[], []],
-	pages = [],
+const extract = [],
 	client = new scrapingbee.ScrapingBeeClient(process.env.APIKEY),
-	imports = [[], []];
+	args = getArgs(),
+	store = args.store || args.s,
+	dir = `./${store}`,
+	pages = [];
 
-let pagesMade = false,
-	lastPage = 10;
+let lastPage = 0;
 
 async function get(url) {
 	const response = await client.get({
@@ -54,6 +55,13 @@ async function get(url) {
 
 const concurrent = 50,
 	running = new Array(concurrent);
+
+function countFreeSlots() {
+	let count = 0;
+	for (let i = 0; i < running.length; i++)
+		count += !running[i] ? 1 : 0;
+	return count;
+}
 
 function useSlot() {
 	for (let i = 0; i < concurrent; i++) {
@@ -74,82 +82,50 @@ function freeSlot() {
 	}
 }
 
-async function scrapeStore(store) {
-	if (!extract[1].length) getCSVs(store);
+async function scrapeStore() {
+	if (!fs.existsSync(dir))
+		fs.mkdirSync(dir);
 
-	if (!pages.length && !pagesMade) {
-		try {
-			const json = JSON.parse(fs.readFileSync(`${store}.json`).toString());
-			if (json[0] == 'finished') {
-				console.log(`You have already completed the scrape of ${store}`);
-				process.exit();
-			}
-			pages.push(...json);
-			pagesMade = true;
-		} catch (error) { }
-	}
+	if (!extract.length) await getCSVs();
 
 	function tryPage(page) {
 		// console.log(`working page ${page}`);
 
 		get(`https://www.etsy.com/uk/shop/${store}/sold?ref=pagination&page=${page}`).then(async function(response) {
 
-			let count = 0;
-			for (let i = 0; i < extract.length; i++)
-				count += extract[i].length;
-			count = Math.round(count / 24) || 1
-
 			const decoder = new TextDecoder(),
-				res = JSON.parse(decoder.decode(response.data)),
-				set = Math.ceil(count / 2000);
+				res = JSON.parse(decoder.decode(response.data));
 
 			lastPage = isNaN(res.lastPage) ? lastPage : res.lastPage;
-
-			if (!extract[set]) extract[set] = [];
-			extract[set].push(...res.items);
-
-			if (!pagesMade) {
-				for (let i = 2; i <= lastPage; i++)
-					pages.push(i);
-				savePage(store);
-				pagesMade = true;
-			}
-
-			page % 10 == 0 && saveExtracted(store);
+			extract[page] = res.items;
+			saveExtracted();
 
 			freeSlot();
-			for (let i = 0; i < concurrent; i++) {
-				// await delay(50);
-				scrapeStore(store);
-			}
+			const count = countFreeSlots();
+			for (let i = 0; i < count; i++)
+				scrapeStore();
+
+			mergeCSVs();
+
 		}).catch(function(e) {
-			// if (e.response.status != 429)
-			// 	console.log('Something went wrong: ' + e.response.data)
 			tryPage(page);
 		});
 	}
 
 	if (useSlot()) {
-		const n = await getNextPage(store);
+		const n = !lastPage ? 1 : await getNextPage();
 		n && tryPage(n);
 	}
 }
 
 let isSaving = false;
-async function saveExtracted(store) {
+async function saveExtracted() {
 
 	while (isSaving)
 		await delay(50);
 
-	let count = 0;
-	for (let i = 0; i < extract.length; i++)
-		count += extract[i].length;
-	if (!count) return;
-	count = Math.round(count / 24) || 1;
-
 	isSaving = true;
-	await saveCSV(store);
-	console.log(`${count} of ${lastPage} (csv updated)`);
+	await saveCSV();
 	isSaving = false;
 }
 
@@ -157,42 +133,35 @@ function delay(time) {
 	return new Promise(resolve => setTimeout(resolve, time));
 }
 
-async function getCSVs(store) {
+async function getCSVs() {
 	let page = 1;
 	async function getCSV() {
 		try {
-			const json = await CSV().fromFile(`${store}-${page}.csv`);
-			if (!extract[page]) extract[page] = [];
-			// @ts-ignore
-			if (!imports[page]) imports[page] = 0;
-			extract[page].push(...json);
-			imports[page] = json.length;
-			// console.log(extract[page].length);
+			extract[page] = await CSV().fromFile(`${dir}/${store}-${page}.csv`);
+			pages[page] = true;
 			page++;
-			getCSV();
+			await getCSV();
 		} catch (error) {
 			// console.error('CSV opening went wrong: ' + error);
 		}
 	}
-	getCSV();
+	await getCSV();
 }
 
-async function saveCSV(store) {
-	savePage(store);
-
-	for (let i = 0; i < extract.length; i++) {
-		const set = extract[i];
-		const len = imports[i];
-		if (!set.length) continue;
-		if (set.length == len) continue;
-		imports[i] = set.length;
-		const csv = await jsonexport(set);
-		await fs.writeFileSync(`${store}-${i}.csv`, csv);
+async function saveCSV() {
+	for (let i = 1; i <= extract.length; i++) {
+		const file = `${dir}/${store}-${i}.csv`;
+		if (fs.existsSync(file)) continue;
+		jsonexport(extract[i], (err, csv) => {
+			fs.writeFileSync(file, csv);
+			if (i % 10 == 0)
+				console.log(`Saving page ${i} of ${lastPage}`);
+		});
 	}
 }
 
 async function savePage(store) {
-	fs.writeFileSync(`${store}.json`, JSON.stringify(pages));
+	fs.writeFileSync(`${dir}/${store}.json`, JSON.stringify(pages));
 }
 
 let aquiringPage = false;
@@ -201,8 +170,14 @@ async function getNextPage() {
 		await delay(50);
 	} while (aquiringPage);
 	aquiringPage = true;
-	const page = !pagesMade ? 1 : pages.shift();
-	await delay(50);
+	let page = 0;
+	for (let i = 1; i <= lastPage; i++) {
+		if (!pages[i]) {
+			pages[i] = true;
+			page = i;
+			break;
+		}
+	}
 	aquiringPage = false;
 	return page;
 }
@@ -218,18 +193,51 @@ function getArgs() {
 	return args;
 }
 
-const args = getArgs(),
-	vStore = args.store || args.s;
-
-if (vStore)
-	scrapeStore(vStore);
+if (store)
+	scrapeStore();
 else {
 	console.log('You need to set `-store "StoreNameExample" while calling this script');
 	process.exit();
 }
 
+let mergeActive = false;
+async function mergeCSVs() {
+	if (mergeActive) return;
+	mergeActive = true;
+
+	let files;
+	do {
+		await delay(500);
+		files = fs.readdirSync(dir);
+		for (let i = 0; i < files.length; i++) {
+			const file = files[i];
+			if (!file.match(/-\d+.csv$/))
+				files.splice(i, 1);
+		}
+	} while (!lastPage && files.length != lastPage);
+
+	console.log('Merging all data!');
+	await getCSVs();
+	const all = [],
+		file = `${dir}/${store}.csv`;
+
+	for (let i = 1; i < extract.length; i++)
+		all.push(...extract[i]);
+
+	console.log(`Items sold: ${all.length}`);
+
+	jsonexport(all, (err, csv) => {
+		fs.writeFileSync(file, csv);
+		console.log(`Merged data saved to ${file}`);
+	});
+
+	files.forEach(file => {
+		fs.unlinkSync(`${dir}/${file}`);
+	});
+
+	process.exit();
+}
+
 process.on('exit', async function() {
-	await saveExtracted(vStore);
-	fs.writeFileSync(`${vStore}.json`, JSON.stringify(['finished']));
 	console.log('Finished!');
 });
