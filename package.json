@@ -18,6 +18,7 @@
   "homepage": "https://github.com/Kraggle/etsy-scraper#readme",
   "dependencies": {
     "csvtojson": "^2.0.10",
+    "dotenv": "^16.0.3",
     "fs": "^0.0.1-security",
     "jsonexport": "^3.2.0",
     "scrapingbee": "^1.6.1"

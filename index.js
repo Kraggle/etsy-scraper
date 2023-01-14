@@ -5,7 +5,12 @@ const scrapingbee = require('scrapingbee'),
 	jsonexport = require('jsonexport'),
 	fs = require('fs'),
 	CSV = require('csvtojson');
+require('dotenv').config();
 
+if (!process.env.APIKEY) {
+	console.error('You need to setup your .env file with your APIKEY from ScrapingBee');
+	process.exit();
+}
 
 const extract_rules = {
 	"lastPage": "nav[role] ul li:nth-last-child(2) span:last-child",
@@ -28,7 +33,7 @@ const extract_rules = {
 
 const extract = [[], []],
 	pages = [],
-	client = new scrapingbee.ScrapingBeeClient('E4UKYNB41MYQW86FT38LJT6YJ38K7MHBKI9PCUH57Y9SFWY0IZAFEPDQ7BDIZO3WOI998PXYYT5RX47H'),
+	client = new scrapingbee.ScrapingBeeClient(process.env.APIKEY),
 	imports = [[], []];
 
 let pagesMade = false,
@@ -75,6 +80,10 @@ async function scrapeStore(store) {
 	if (!pages.length && !pagesMade) {
 		try {
 			const json = JSON.parse(fs.readFileSync(`${store}.json`).toString());
+			if (json[0] == 'finished') {
+				console.log(`You have already completed the scrape of ${store}`);
+				process.exit();
+			}
 			pages.push(...json);
 			pagesMade = true;
 		} catch (error) { }
@@ -135,6 +144,7 @@ async function saveExtracted(store) {
 	let count = 0;
 	for (let i = 0; i < extract.length; i++)
 		count += extract[i].length;
+	if (!count) return;
 	count = Math.round(count / 24) || 1;
 
 	isSaving = true;
@@ -182,9 +192,7 @@ async function saveCSV(store) {
 }
 
 async function savePage(store) {
-	fs.writeFile(`${store}.json`, JSON.stringify(pages), err => {
-		// console.error(err);
-	});
+	fs.writeFileSync(`${store}.json`, JSON.stringify(pages));
 }
 
 let aquiringPage = false;
@@ -215,10 +223,13 @@ const args = getArgs(),
 
 if (vStore)
 	scrapeStore(vStore);
-else
+else {
 	console.log('You need to set `-store "StoreNameExample" while calling this script');
+	process.exit();
+}
 
 process.on('exit', async function() {
 	await saveExtracted(vStore);
+	fs.writeFileSync(`${vStore}.json`, JSON.stringify(['finished']));
 	console.log('Finished!');
 });
