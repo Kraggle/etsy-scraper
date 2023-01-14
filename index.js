@@ -1,3 +1,4 @@
+// @ts-nocheck
 // Install the Node ScrapingBee library
 // npm install scrapingbee
 const scrapingbee = require('scrapingbee'),
@@ -27,24 +28,26 @@ const extract_rules = {
 
 const extract = [[], []],
 	pages = [],
-	client = new scrapingbee.ScrapingBeeClient('E4UKYNB41MYQW86FT38LJT6YJ38K7MHBKI9PCUH57Y9SFWY0IZAFEPDQ7BDIZO3WOI998PXYYT5RX47H');
+	client = new scrapingbee.ScrapingBeeClient('E4UKYNB41MYQW86FT38LJT6YJ38K7MHBKI9PCUH57Y9SFWY0IZAFEPDQ7BDIZO3WOI998PXYYT5RX47H'),
+	imports = [[], []];
 
-let pagesMade = false;
+let pagesMade = false,
+	lastPage = 10;
 
 async function get(url) {
 	const response = await client.get({
-		url: url,
+		url,
 		params: {
 			render_js: 'false',
 			premium_proxy: 'true',
 			extract_rules: extract_rules,
-			country_code: 'us',
+			country_code: 'gb',
 		},
 	});
 	return response
 }
 
-const concurrent = 5,
+const concurrent = 50,
 	running = new Array(concurrent);
 
 function useSlot() {
@@ -69,7 +72,7 @@ function freeSlot() {
 async function scrapeStore(store) {
 	if (!extract[1].length) getCSVs(store);
 
-	if (!pages.length) {
+	if (!pages.length && !pagesMade) {
 		try {
 			const json = JSON.parse(fs.readFileSync(`${store}.json`).toString());
 			pages.push(...json);
@@ -78,41 +81,37 @@ async function scrapeStore(store) {
 	}
 
 	function tryPage(page) {
-		// console.log(`working page ${page}`);
+		console.log(`working page ${page}`);
 
 		get(`https://www.etsy.com/uk/shop/${store}/sold?ref=pagination&page=${page}`).then(async function(response) {
 
 			let count = 0;
 			for (let i = 0; i < extract.length; i++)
 				count += extract[i].length;
-			count = Math.round(count / 24)
+			count = Math.round(count / 24) || 1
 
 			const decoder = new TextDecoder(),
 				res = JSON.parse(decoder.decode(response.data)),
 				set = Math.ceil(count / 2000);
 
+			lastPage = isNaN(res.lastPage) ? lastPage : res.lastPage;
+
 			if (!extract[set]) extract[set] = [];
 			extract[set].push(...res.items);
 
 			if (!pagesMade) {
-				for (let i = 2; i <= res.lastPage; i++)
+				for (let i = 2; i <= lastPage; i++)
 					pages.push(i);
 				savePage(store);
 				pagesMade = true;
 			}
 
-			if (count % 10 == 0) {
-				saveCSV(store);
-				console.log(`${count} of ${res.lastPage} (csv updated)`);
-			}
+			page % 10 == 0 && saveExtracted(store);
 
-			if (page == res.lastPage) await saveCSV(store);
-			else {
-				freeSlot();
-				for (let i = 0; i < concurrent; i++) {
-					await delay(50);
-					scrapeStore(store);
-				}
+			freeSlot();
+			for (let i = 0; i < concurrent; i++) {
+				// await delay(50);
+				scrapeStore(store);
 			}
 		}).catch(function(e) {
 			// if (e.response.status != 429)
@@ -122,9 +121,26 @@ async function scrapeStore(store) {
 	}
 
 	if (useSlot()) {
-		const n = getNextPage(store);
+		const n = await getNextPage(store);
 		n && tryPage(n);
 	}
+}
+
+let isSaving = false;
+async function saveExtracted(store) {
+
+	while (isSaving)
+		await delay(50);
+
+	let count = 0;
+	for (let i = 0; i < extract.length; i++)
+		count += extract[i].length;
+	count = Math.round(count / 24) || 1;
+
+	isSaving = true;
+	await saveCSV(store);
+	console.log(`${count} of ${lastPage} (csv updated)`);
+	isSaving = false;
 }
 
 function delay(time) {
@@ -137,7 +153,10 @@ async function getCSVs(store) {
 		try {
 			const json = await CSV().fromFile(`${store}-${page}.csv`);
 			if (!extract[page]) extract[page] = [];
+			// @ts-ignore
+			if (!imports[page]) imports[page] = 0;
 			extract[page].push(...json);
+			imports[page] = json.length;
 			// console.log(extract[page].length);
 			page++;
 			getCSV();
@@ -153,11 +172,12 @@ async function saveCSV(store) {
 
 	for (let i = 0; i < extract.length; i++) {
 		const set = extract[i];
+		const len = imports[i];
 		if (!set.length) continue;
+		if (set.length == len) continue;
+		imports[i] = set.length;
 		const csv = await jsonexport(set);
-		fs.writeFile(`${store}-${i}.csv`, csv, err => {
-			// console.error(err);
-		});
+		await fs.writeFileSync(`${store}-${i}.csv`, csv);
 	}
 }
 
@@ -167,10 +187,38 @@ async function savePage(store) {
 	});
 }
 
-function getNextPage(store) {
+let aquiringPage = false;
+async function getNextPage() {
+	do {
+		await delay(50);
+	} while (aquiringPage);
+	aquiringPage = true;
 	const page = !pagesMade ? 1 : pages.shift();
-	// savePage(store);
+	await delay(50);
+	aquiringPage = false;
 	return page;
 }
 
-scrapeStore('PaddingPaws');
+function getArgs() {
+	const args = {};
+	for (let i = 0; i < process.argv.length; i++) {
+		const key = process.argv[i],
+			value = process.argv[i + 1];
+		if (key.match(/^-\w+$/))
+			args[key.replace(/^-/, '')] = value;
+	}
+	return args;
+}
+
+const args = getArgs(),
+	vStore = args.store || args.s;
+
+if (vStore)
+	scrapeStore(vStore);
+else
+	console.log('You need to set `-store "StoreNameExample" while calling this script');
+
+process.on('exit', async function() {
+	await saveExtracted(vStore);
+	console.log('Finished!');
+});
