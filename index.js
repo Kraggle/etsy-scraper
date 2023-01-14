@@ -90,7 +90,7 @@ async function scrapeStore(store) {
 	}
 
 	function tryPage(page) {
-		console.log(`working page ${page}`);
+		// console.log(`working page ${page}`);
 
 		get(`https://www.etsy.com/uk/shop/${store}/sold?ref=pagination&page=${page}`).then(async function(response) {
 
