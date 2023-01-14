@@ -1,0 +1,25 @@
+{
+  "name": "etsy-scraper",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Kraggle/etsy-scraper.git"
+  },
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/Kraggle/etsy-scraper/issues"
+  },
+  "homepage": "https://github.com/Kraggle/etsy-scraper#readme",
+  "dependencies": {
+    "csvtojson": "^2.0.10",
+    "fs": "^0.0.1-security",
+    "jsonexport": "^3.2.0",
+    "scrapingbee": "^1.6.1"
+  }
+}
