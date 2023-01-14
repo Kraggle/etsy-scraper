@@ -202,19 +202,19 @@ else {
 
 let mergeActive = false;
 async function mergeCSVs() {
-	if (mergeActive) return;
+	if (mergeActive || !lastPage) return;
 	mergeActive = true;
 
 	let files;
 	do {
-		await delay(500);
+		await delay(1000);
 		files = fs.readdirSync(dir);
 		for (let i = 0; i < files.length; i++) {
 			const file = files[i];
 			if (!file.match(/-\d+.csv$/))
 				files.splice(i, 1);
 		}
-	} while (!lastPage && files.length != lastPage);
+	} while (files.length != lastPage);
 
 	console.log('Merging all data!');
 	await getCSVs();
